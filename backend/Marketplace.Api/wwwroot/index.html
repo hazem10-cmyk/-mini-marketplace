@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mini Marketplace</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+    .error { color: #b00020; }
+  </style>
+</head>
+<body>
+  <h1>Mini Marketplace</h1>
+  <p id="status">Checking API...</p>
+  <ul id="services"></ul>
+
+  <script>
+    async function load() {
+      const status = document.getElementById("status");
+      const list = document.getElementById("services");
+      try {
+        const health = await fetch("/api/health");
+        if (!health.ok) throw new Error("Health check failed: " + health.status);
+        status.textContent = "API is running ✔";
+
+        const res = await fetch("/api/services");
+        if (!res.ok) throw new Error("Failed to load services: " + res.status);
+
+        for (const s of await res.json()) {
+          const li = document.createElement("li");
+          li.textContent = s.title + " - $" + s.price;
+          list.appendChild(li);
+        }
+      } catch (err) {
+        status.textContent = err.message;
+        status.className = "error";
+      }
+    }
+    load();
+  </script>
+</body>
+</html>
