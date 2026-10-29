@@ -15,7 +15,15 @@ var services = new List<ServiceDto>
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", timeUtc = DateTime.UtcNow }));
 
-app.MapGet("/api/services", () => Results.Ok(services));
+app.MapGet("/api/services", (decimal? maxPrice) =>
+{
+    IEnumerable<ServiceDto> result = services;
+
+    if (maxPrice is not null)
+        result = result.Where(s => s.Price <= maxPrice);
+
+    return Results.Ok(result);
+});
 
 app.MapGet("/api/services/{id:int}", (int id) =>
 {
