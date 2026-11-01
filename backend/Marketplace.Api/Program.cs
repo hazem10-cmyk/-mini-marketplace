@@ -1,11 +1,18 @@
+using Marketplace.Api.Data;
+using Microsoft.EntityFrameworkCore;
+
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddDbContext<MarketplaceDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
+
 var app = builder.Build();
 
 // Serve wwwroot/index.html at "/"
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-// Temporary in-memory data (replaced by PostgreSQL in Phase 2)
+// Temporary in-memory data (replaced by the database in step 2.6)
 var services = new List<ServiceDto>
 {
     new(1, "Professional logo design", 25m),
