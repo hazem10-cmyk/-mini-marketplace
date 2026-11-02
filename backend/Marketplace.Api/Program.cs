@@ -8,6 +8,14 @@ builder.Services.AddDbContext<MarketplaceDbContext>(options =>
 
 var app = builder.Build();
 
+if (app.Environment.IsDevelopment())
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<MarketplaceDbContext>();
+    await db.Database.MigrateAsync();
+    await DevSeeder.SeedAsync(db);
+}
+
 // Serve wwwroot/index.html at "/"
 app.UseDefaultFiles();
 app.UseStaticFiles();
