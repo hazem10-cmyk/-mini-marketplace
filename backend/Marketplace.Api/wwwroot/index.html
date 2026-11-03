@@ -26,9 +26,15 @@
         const res = await fetch("/api/services");
         if (!res.ok) throw new Error("Failed to load services: " + res.status);
 
-        for (const s of await res.json()) {
+        const data = await res.json();
+        if (data.items.length === 0) status.textContent = "No services found";
+
+        for (const s of data.items) {
+          const rating = s.averageRating === null
+            ? "No reviews yet"
+            : s.averageRating + " stars (" + s.reviewCount + ")";
           const li = document.createElement("li");
-          li.textContent = s.title + " - $" + s.price;
+          li.textContent = s.title + " - $" + s.price + " - by " + s.sellerName + " - " + rating;
           list.appendChild(li);
         }
       } catch (err) {
