@@ -1,3 +1,5 @@
+using Marketplace.Api.Data;
+
 namespace Marketplace.Api.Dtos;
 
 public record PagedResult<T>(
@@ -33,3 +35,5 @@ public record ReviewItem(
     string? Comment,
     string BuyerName,
     DateTime CreatedAt);
+
+public record CurrentUser(int Id, string Email, string DisplayName, UserRole Role);
