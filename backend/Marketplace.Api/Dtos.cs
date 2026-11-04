@@ -37,3 +37,7 @@ public record ReviewItem(
     DateTime CreatedAt);
 
 public record CurrentUser(int Id, string Email, string DisplayName, UserRole Role);
+
+public record MyServiceItem(int Id, string Title, decimal Price, int DeliveryDays, DateTime CreatedAt);
+
+public record ServiceInput(string? Title, string? Description, decimal Price, int DeliveryDays);

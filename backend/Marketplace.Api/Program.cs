@@ -23,7 +23,12 @@ if (builder.Environment.IsDevelopment())
     authentication.AddScheme<AuthenticationSchemeOptions, DevHeaderAuthHandler>(
         DevHeaderAuthHandler.SchemeName, null);
 }
-builder.Services.AddAuthorization();
+
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy(Policies.Buyer, policy => policy.RequireRole(nameof(UserRole.Buyer)))
+    .AddPolicy(Policies.Seller, policy => policy.RequireRole(nameof(UserRole.Seller)))
+    .AddPolicy(Policies.BuyerOrSeller, policy => policy.RequireRole(nameof(UserRole.Buyer), nameof(UserRole.Seller)))
+    .AddPolicy(Policies.Admin, policy => policy.RequireRole(nameof(UserRole.Admin)));
 
 var app = builder.Build();
 
