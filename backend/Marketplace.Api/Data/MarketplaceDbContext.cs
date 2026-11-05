@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace Marketplace.Api.Data;
 
@@ -8,6 +9,12 @@ public class MarketplaceDbContext(DbContextOptions<MarketplaceDbContext> options
     public DbSet<Service> Services => Set<Service>();
     public DbSet<Order> Orders => Set<Order>();
     public DbSet<Review> Reviews => Set<Review>();
+
+    protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
+    {
+        // The database stores UTC times without a "kind", so mark them as UTC when reading.
+        configurationBuilder.Properties<DateTime>().HaveConversion<UtcDateTimeConverter>();
+    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -62,3 +69,7 @@ public class MarketplaceDbContext(DbContextOptions<MarketplaceDbContext> options
         });
     }
 }
+
+public class UtcDateTimeConverter() : ValueConverter<DateTime, DateTime>(
+    value => value,
+    value => DateTime.SpecifyKind(value, DateTimeKind.Utc));
