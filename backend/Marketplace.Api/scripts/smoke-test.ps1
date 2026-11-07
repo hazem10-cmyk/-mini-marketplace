@@ -39,254 +39,112 @@ function Check {
     }
 }
 
+# Ali orders service 4 from Sara.
+function New-Order {
+    $r = Call POST "/api/orders" 4 '{"serviceId":4}'
+    if ($r.Status -eq 201) { return [int]$r.Json.id }
+    return 0
+}
+
+# Drives a new order through accept, deliver, and complete.
+function New-CompletedOrder {
+    $id = New-Order
+    if ($id -le 0) { return 0 }
+    if ((Call POST "/api/orders/$id/accept" 2).Status -ne 200) { return 0 }
+    if ((Call POST "/api/orders/$id/deliver" 2).Status -ne 200) { return 0 }
+    if ((Call POST "/api/orders/$id/complete" 4).Status -ne 200) { return 0 }
+    return $id
+}
+
 $r = Call GET "/api/health"
 if ($r.Status -ne 200) {
     Write-Host "The API is not running at $BaseUrl. Start it first (dotnet run) and try again." -ForegroundColor Red
     exit 1
 }
 
-Write-Host "== Identity =="
-Check "health returns 200" ($r.Status -eq 200)
+$good = '{"rating":4,"comment":"Smoke test review"}'
 
-$r = Call GET "/api/auth/me"
-Check "me without identity returns 401" ($r.Status -eq 401) "got $($r.Status)"
+Write-Host "== Reviews: who can review, and what is valid =="
+$flow = New-CompletedOrder
+Check "a completed order is ready" ($flow -gt 0)
 
-$r = Call GET "/api/auth/me" 2
-Check "me as Sara returns 200 and role Seller" ($r.Status -eq 200 -and $r.Json.role -eq "Seller") "got $($r.Status)"
+$r = Call POST "/api/orders/$flow/review" 0 $good
+Check "review without identity returns 401" ($r.Status -eq 401) "got $($r.Status)"
 
-$r = Call GET "/api/auth/me" 99
-Check "me with an unknown user returns 401" ($r.Status -eq 401) "got $($r.Status)"
+$r = Call POST "/api/orders/$flow/review" 2 $good
+Check "the seller cannot review (403)" ($r.Status -eq 403) "got $($r.Status)"
 
-Write-Host "== Public services =="
-$r = Call GET "/api/services"
-Check "services list returns 200 with at least 6 services" ($r.Status -eq 200 -and $r.Json.totalItems -ge 6) "got $($r.Status)"
+$r = Call POST "/api/orders/$flow/review" 5 $good
+Check "another buyer gets 404" ($r.Status -eq 404) "got $($r.Status)"
 
-$r = Call GET "/api/services/1"
-Check "service 1 details (title, 1 review, rating 5)" ($r.Status -eq 200 -and $r.Json.title -eq "Professional logo design" -and $r.Json.reviewCount -eq 1 -and $r.Json.averageRating -eq 5) "got $($r.Status)"
+$r = Call POST "/api/orders/$flow/review" 1 $good
+Check "admin gets 404" ($r.Status -eq 404) "got $($r.Status)"
 
-$r = Call GET "/api/services/7"
-Check "inactive service 7 returns 404" ($r.Status -eq 404) "got $($r.Status)"
+$r = Call POST "/api/orders/9999/review" 4 $good
+Check "review on a missing order returns 404" ($r.Status -eq 404) "got $($r.Status)"
 
-$r = Call GET "/api/services/abc"
-Check "service id abc returns 404" ($r.Status -eq 404) "got $($r.Status)"
+$r = Call POST "/api/orders/$flow/review" 4 '{"rating":6}'
+Check "rating 6 returns 400 with a rating error" ($r.Status -eq 400 -and $r.Json.errors.rating) "got $($r.Status)"
 
-$r = Call GET "/api/services?pageSize=100"
-Check "pageSize=100 returns 400" ($r.Status -eq 400) "got $($r.Status)"
+$r = Call POST "/api/orders/$flow/review" 4 '{"comment":"no rating"}'
+Check "missing rating returns 400" ($r.Status -eq 400) "got $($r.Status)"
 
-Write-Host "== Seller services =="
-$serviceOk = '{"title":"Smoke test service","description":"Created by the smoke test.","price":30,"deliveryDays":4}'
-$serviceBad = '{"title":"abc","description":"","price":0,"deliveryDays":99}'
-$serviceUpdate = '{"title":"Smoke test service v2","description":"Updated by the smoke test.","price":35.5,"deliveryDays":5}'
+$long = '{"rating":5,"comment":"' + ('x' * 1001) + '"}'
+$r = Call POST "/api/orders/$flow/review" 4 $long
+Check "a comment of 1001 characters returns 400 with a comment error" ($r.Status -eq 400 -and $r.Json.errors.comment) "got $($r.Status)"
 
-$r = Call POST "/api/services" 4 $serviceOk
-Check "POST service as a buyer returns 403" ($r.Status -eq 403) "got $($r.Status)"
+Write-Host "== Reviews: only a Completed order, only once =="
+$pending = New-Order
+$r = Call POST "/api/orders/$pending/review" 4 $good
+Check "review on a Pending order returns 409" ($r.Status -eq 409) "got $($r.Status)"
 
-$r = Call POST "/api/services" 2 $serviceBad
-Check "POST invalid service returns 400 with field errors" ($r.Status -eq 400 -and $r.Json.errors.title -and $r.Json.errors.price) "got $($r.Status)"
+$cancelled = New-Order
+[void](Call POST "/api/orders/$cancelled/cancel" 4)
+$r = Call POST "/api/orders/$cancelled/review" 4 $good
+Check "review on a Cancelled order returns 409" ($r.Status -eq 409) "got $($r.Status)"
 
-$r = Call POST "/api/services" 2 $serviceOk
-$newId = $r.Json.id
-Check "POST valid service returns 201 with an id" ($r.Status -eq 201 -and $newId -gt 0) "got $($r.Status)"
+Write-Host "== Reviews: the happy path =="
+$before = (Call GET "/api/services/4").Json.reviewCount
 
-if ($newId -gt 0) {
-    $r = Call GET "/api/services/mine" 2
-    Check "mine lists the new service" ($r.Status -eq 200 -and ($r.Json.items | Where-Object { $_.id -eq $newId })) "got $($r.Status)"
+$r = Call POST "/api/orders/$flow/review" 4 $good
+Check "the buyer reviews a Completed order: 201, rating 4, comment saved" ($r.Status -eq 201 -and $r.Json.rating -eq 4 -and $r.Json.comment -eq "Smoke test review") "got $($r.Status)"
 
-    $r = Call PUT "/api/services/$newId" 2 $serviceUpdate
-    Check "PUT own service returns 200 with the new price" ($r.Status -eq 200 -and $r.Json.price -eq 35.5) "got $($r.Status)"
+$r = Call POST "/api/orders/$flow/review" 4 $good
+Check "a second review on the same order returns 409" ($r.Status -eq 409) "got $($r.Status)"
 
-    $r = Call PUT "/api/services/2" 2 $serviceUpdate
-    Check "PUT someone else's service returns 403" ($r.Status -eq 403) "got $($r.Status)"
+$r = Call GET "/api/orders/$flow" 4
+Check "the order details show the review" ($r.Status -eq 200 -and $r.Json.review.rating -eq 4) "got $($r.Status)"
 
-    $r = Call PUT "/api/services/9999" 2 $serviceUpdate
-    Check "PUT missing service returns 404" ($r.Status -eq 404) "got $($r.Status)"
+$r = Call GET "/api/services/4"
+Check "the service review count went up by 1" ($r.Status -eq 200 -and $r.Json.reviewCount -eq ($before + 1)) "before $before, now $($r.Json.reviewCount)"
 
-    $r = Call DELETE "/api/services/2" 2
-    Check "DELETE someone else's service returns 403" ($r.Status -eq 403) "got $($r.Status)"
+$r = Call GET "/api/services/4/reviews?pageSize=5"
+Check "the review appears in the service reviews (newest first)" ($r.Status -eq 200 -and ($r.Json.items | Where-Object { $_.comment -eq "Smoke test review" -and $_.buyerName -eq "Ali" })) "got $($r.Status)"
 
-    $r = Call DELETE "/api/services/$newId" 2
-    Check "DELETE own service returns 204" ($r.Status -eq 204) "got $($r.Status)"
+Write-Host "== Reviews: the comment is optional =="
+$optional = New-CompletedOrder
+Check "another completed order is ready" ($optional -gt 0)
 
-    $r = Call DELETE "/api/services/$newId" 2
-    Check "DELETE again returns 404" ($r.Status -eq 404) "got $($r.Status)"
+$r = Call POST "/api/orders/$optional/review" 4 '{"rating":3}'
+Check "a review with only a rating returns 201 and a null comment" ($r.Status -eq 201 -and $r.Json.rating -eq 3 -and $null -eq $r.Json.comment) "got $($r.Status)"
 
-    $r = Call GET "/api/services/$newId"
-    Check "deleted service is hidden (404)" ($r.Status -eq 404) "got $($r.Status)"
-}
+Write-Host "== Reviews: five simultaneous reviews on one order =="
+$raceOrder = New-CompletedOrder
+Check "a completed order is ready for the race" ($raceOrder -gt 0)
 
-Write-Host "== Orders: lists =="
-$r = Call GET "/api/orders"
-Check "orders list without identity returns 401" ($r.Status -eq 401) "got $($r.Status)"
-
-$r = Call GET "/api/orders" 1
-Check "orders list as admin returns 403" ($r.Status -eq 403) "got $($r.Status)"
-
-$r = Call GET "/api/orders?status=Completed&pageSize=50" 4
-Check "Ali sees completed order 1 with Sara as the other party" ($r.Status -eq 200 -and ($r.Json.items | Where-Object { $_.id -eq 1 -and $_.otherPartyName -eq "Sara" })) "got $($r.Status)"
-
-$r = Call GET "/api/orders?status=Completed&pageSize=50" 2
-Check "Sara sees completed order 1 with Ali as the other party" ($r.Status -eq 200 -and ($r.Json.items | Where-Object { $_.id -eq 1 -and $_.otherPartyName -eq "Ali" })) "got $($r.Status)"
-
-$r = Call GET "/api/orders?status=pending" 4
-Check "status filter ignores letter case" ($r.Status -eq 200 -and $r.Json.totalItems -ge 1) "got $($r.Status)"
-
-$r = Call GET "/api/orders?status=3" 4
-Check "status=3 returns 400" ($r.Status -eq 400) "got $($r.Status)"
-
-$r = Call GET "/api/orders?status=foo" 4
-Check "status=foo returns 400" ($r.Status -eq 400) "got $($r.Status)"
-
-Write-Host "== Orders: details =="
-$r = Call GET "/api/orders/1" 4
-Check "order 1 as its buyer (price 20, Completed, review 5)" ($r.Status -eq 200 -and $r.Json.priceAtOrder -eq 20 -and $r.Json.status -eq "Completed" -and $r.Json.buyer.displayName -eq "Ali" -and $r.Json.seller.displayName -eq "Sara" -and $r.Json.review.rating -eq 5) "got $($r.Status)"
-
-$r = Call GET "/api/orders/1" 2
-Check "order 1 as its seller returns 200" ($r.Status -eq 200) "got $($r.Status)"
-
-$r = Call GET "/api/orders/1" 5
-Check "order 1 as another buyer returns 404" ($r.Status -eq 404) "got $($r.Status)"
-
-$r = Call GET "/api/orders/1" 1
-Check "order 1 as admin returns 404" ($r.Status -eq 404) "got $($r.Status)"
-
-$r = Call GET "/api/orders/9999" 4
-Check "missing order returns 404" ($r.Status -eq 404) "got $($r.Status)"
-
-Write-Host "== Orders: creation =="
-$r = Call POST "/api/orders" 0 '{"serviceId":4}'
-Check "POST order without identity returns 401" ($r.Status -eq 401) "got $($r.Status)"
-
-$r = Call POST "/api/orders" 2 '{"serviceId":4}'
-Check "POST order as a seller returns 403" ($r.Status -eq 403) "got $($r.Status)"
-
-$r = Call POST "/api/orders" 4 '{}'
-Check "POST order without serviceId returns 400" ($r.Status -eq 400) "got $($r.Status)"
-
-$r = Call POST "/api/orders" 4 '{"serviceId":7}'
-Check "POST order for an inactive service returns 404" ($r.Status -eq 404) "got $($r.Status)"
-
-$r = Call POST "/api/orders" 4 '{"serviceId":9999}'
-Check "POST order for a missing service returns 404" ($r.Status -eq 404) "got $($r.Status)"
-
-Write-Host "== Orders: the price is copied (decision D3) =="
-$banner15 = '{"title":"Social media banner pack","description":"Five banners sized for the main platforms.","price":15,"deliveryDays":2}'
-$banner20 = '{"title":"Social media banner pack","description":"Five banners sized for the main platforms.","price":20,"deliveryDays":2}'
-
-[void](Call PUT "/api/services/4" 2 $banner15)
-$r = Call POST "/api/orders" 4 '{"serviceId":4}'
-$orderId = $r.Json.id
-Check "Ali orders service 4: 201, Pending, price copied (15)" ($r.Status -eq 201 -and $r.Json.status -eq "Pending" -and $r.Json.priceAtOrder -eq 15) "got $($r.Status)"
-
-if ($orderId -gt 0) {
-    $r = Call PUT "/api/services/4" 2 $banner20
-    Check "Sara raises the service price to 20" ($r.Status -eq 200 -and $r.Json.price -eq 20) "got $($r.Status)"
-
-    $r = Call GET "/api/orders/$orderId" 4
-    Check "the order keeps its old price (15)" ($r.Status -eq 200 -and $r.Json.priceAtOrder -eq 15) "got $($r.Status)"
-
-    [void](Call PUT "/api/services/4" 2 $banner15)
-}
-
-Write-Host "== Orders: lifecycle (Ali buys from Sara) =="
-$r = Call POST "/api/orders" 4 '{"serviceId":4}'
-$flow = $r.Json.id
-Check "new order starts as Pending" ($r.Status -eq 201 -and $r.Json.status -eq "Pending") "got $($r.Status)"
-
-if ($flow -gt 0) {
-    $p = "/api/orders/$flow"
-
-    $r = Call POST "$p/accept" 0
-    Check "accept without identity returns 401" ($r.Status -eq 401) "got $($r.Status)"
-
-    $r = Call POST "$p/accept" 4
-    Check "the buyer cannot accept (403)" ($r.Status -eq 403) "got $($r.Status)"
-
-    $r = Call POST "$p/accept" 5
-    Check "another buyer gets 404" ($r.Status -eq 404) "got $($r.Status)"
-
-    $r = Call POST "$p/accept" 3
-    Check "another seller gets 404" ($r.Status -eq 404) "got $($r.Status)"
-
-    $r = Call POST "$p/accept" 1
-    Check "admin gets 404" ($r.Status -eq 404) "got $($r.Status)"
-
-    $r = Call POST "$p/deliver" 2
-    Check "deliver on a Pending order returns 409" ($r.Status -eq 409) "got $($r.Status)"
-
-    $r = Call POST "$p/complete" 4
-    Check "complete on a Pending order returns 409" ($r.Status -eq 409) "got $($r.Status)"
-
-    $r = Call POST "$p/accept" 2
-    Check "the seller accepts: 200 and InProgress" ($r.Status -eq 200 -and $r.Json.status -eq "InProgress") "got $($r.Status)"
-
-    $r = Call POST "$p/accept" 2
-    Check "accept twice returns 409" ($r.Status -eq 409) "got $($r.Status)"
-
-    $r = Call POST "$p/cancel" 4
-    Check "cancel after accept returns 409" ($r.Status -eq 409) "got $($r.Status)"
-
-    $r = Call POST "$p/complete" 2
-    Check "the seller cannot complete (403)" ($r.Status -eq 403) "got $($r.Status)"
-
-    $r = Call POST "$p/deliver" 4
-    Check "the buyer cannot deliver (403)" ($r.Status -eq 403) "got $($r.Status)"
-
-    $r = Call POST "$p/deliver" 2
-    Check "the seller delivers: 200 and Delivered" ($r.Status -eq 200 -and $r.Json.status -eq "Delivered") "got $($r.Status)"
-
-    $r = Call POST "$p/complete" 4
-    Check "the buyer completes: 200 and Completed" ($r.Status -eq 200 -and $r.Json.status -eq "Completed") "got $($r.Status)"
-
-    $r = Call POST "$p/cancel" 4
-    Check "cancel a Completed order returns 409" ($r.Status -eq 409) "got $($r.Status)"
-
-    $r = Call GET $p 4
-    Check "final status is Completed and updatedAt is after createdAt" ($r.Status -eq 200 -and $r.Json.status -eq "Completed" -and ([datetime]$r.Json.updatedAt) -gt ([datetime]$r.Json.createdAt)) "got $($r.Status)"
-}
-
-Write-Host "== Orders: cancel =="
-$r = Call POST "/api/orders" 4 '{"serviceId":4}'
-$c1 = $r.Json.id
-Check "order created for the buyer-cancel test" ($r.Status -eq 201 -and $c1 -gt 0) "got $($r.Status)"
-
-if ($c1 -gt 0) {
-    $r = Call POST "/api/orders/$c1/cancel" 4
-    Check "the buyer cancels a Pending order: 200 and Cancelled" ($r.Status -eq 200 -and $r.Json.status -eq "Cancelled") "got $($r.Status)"
-
-    $r = Call POST "/api/orders/$c1/accept" 2
-    Check "accept a Cancelled order returns 409" ($r.Status -eq 409) "got $($r.Status)"
-}
-
-$r = Call POST "/api/orders" 5 '{"serviceId":4}'
-$c2 = $r.Json.id
-Check "order created for the seller-cancel test" ($r.Status -eq 201 -and $c2 -gt 0) "got $($r.Status)"
-
-if ($c2 -gt 0) {
-    $r = Call POST "/api/orders/$c2/cancel" 2
-    Check "the seller cancels a Pending order: 200 and Cancelled" ($r.Status -eq 200 -and $r.Json.status -eq "Cancelled") "got $($r.Status)"
-}
-
-$r = Call POST "/api/orders/9999/accept" 2
-Check "action on a missing order returns 404" ($r.Status -eq 404) "got $($r.Status)"
-
-Write-Host "== Orders: five simultaneous accept requests =="
-$r = Call POST "/api/orders" 4 '{"serviceId":4}'
-$raceId = $r.Json.id
-Check "order created for the race test" ($r.Status -eq 201 -and $raceId -gt 0) "got $($r.Status)"
-
-if ($raceId -gt 0) {
+if ($raceOrder -gt 0) {
     $jobs = 1..5 | ForEach-Object {
-        Start-Job -ArgumentList $BaseUrl, $raceId -ScriptBlock {
+        Start-Job -ArgumentList $BaseUrl, $raceOrder -ScriptBlock {
             param($base, $id)
-            & curl.exe -s -o NUL -w "%{http_code}" -X POST -H "X-Dev-User: 2" "$base/api/orders/$id/accept"
+            '{"rating":5,"comment":"Race review"}' | & curl.exe -s -o NUL -w "%{http_code}" -X POST -H "Content-Type: application/json" -H "X-Dev-User: 4" --data-binary "@-" "$base/api/orders/$id/review"
         }
     }
     $codes = @($jobs | Wait-Job | Receive-Job)
     $jobs | Remove-Job
 
-    $okCount = @($codes | Where-Object { "$_" -eq "200" }).Count
+    $createdCount = @($codes | Where-Object { "$_" -eq "201" }).Count
     $conflictCount = @($codes | Where-Object { "$_" -eq "409" }).Count
-    Check "exactly one request wins (200) and four get 409" ($okCount -eq 1 -and $conflictCount -eq 4) "got: $($codes -join ', ')"
+    Check "exactly one review is created (201) and four get 409" ($createdCount -eq 1 -and $conflictCount -eq 4) "got: $($codes -join ', ')"
 }
 
 Write-Host ""

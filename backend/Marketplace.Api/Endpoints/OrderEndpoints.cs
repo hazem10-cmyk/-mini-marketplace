@@ -3,6 +3,8 @@ using Marketplace.Api.Auth;
 using Marketplace.Api.Data;
 using Marketplace.Api.Domain;
 using Marketplace.Api.Dtos;
+using Marketplace.Api.Validation;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 
 namespace Marketplace.Api.Endpoints;
@@ -25,6 +27,8 @@ public static class OrderEndpoints
             ChangeStatus(id, OrderAction.Complete, user, db)).RequireAuthorization();
         group.MapPost("/{id:int}/cancel", (int id, ClaimsPrincipal user, MarketplaceDbContext db) =>
             ChangeStatus(id, OrderAction.Cancel, user, db)).RequireAuthorization();
+
+        group.MapPost("/{id:int}/review", CreateReview).RequireAuthorization();
     }
 
     private static async Task<IResult> CreateOrder(
@@ -194,6 +198,67 @@ public static class OrderEndpoints
         return Results.Ok(await GetDetailsAsync(db, id, userId));
     }
 
+    private static async Task<IResult> CreateReview(
+        int id,
+        CreateReviewRequest request,
+        ClaimsPrincipal user,
+        MarketplaceDbContext db)
+    {
+        var errors = ReviewInputValidator.Validate(request);
+        if (errors.Count > 0)
+            return Results.ValidationProblem(errors);
+
+        var userId = user.GetUserId();
+
+        // 1) Is this user part of the order? If not: 404 (decision D10).
+        var order = await db.Orders
+            .AsNoTracking()
+            .Where(o => o.Id == id && (o.BuyerId == userId || o.Service.SellerId == userId))
+            .Select(o => new { o.Status, o.BuyerId, HasReview = o.Review != null })
+            .FirstOrDefaultAsync();
+
+        if (order is null)
+            return OrderNotFound();
+
+        // 2) Only the buyer can review.
+        if (order.BuyerId != userId)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status403Forbidden,
+                title: "Only the buyer can review an order");
+        }
+
+        // 3) Only a Completed order can be reviewed, and only once (decision D4).
+        if (order.Status != OrderStatus.Completed)
+            return Conflict($"Only a Completed order can be reviewed. The order is {order.Status}.");
+
+        if (order.HasReview)
+            return Conflict("This order already has a review.");
+
+        var review = new Review
+        {
+            OrderId = id,
+            Rating = request.Rating!.Value,
+            Comment = string.IsNullOrWhiteSpace(request.Comment) ? null : request.Comment.Trim()
+        };
+
+        db.Reviews.Add(review);
+
+        try
+        {
+            await db.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is SqlException { Number: 2601 or 2627 })
+        {
+            // Two requests arrived together: the unique index on OrderId let only one review in.
+            return Conflict("This order already has a review.");
+        }
+
+        return Results.Created(
+            $"/api/orders/{id}",
+            new ReviewInfo(review.Rating, review.Comment, review.CreatedAt));
+    }
+
     private static async Task<OrderDetails?> GetDetailsAsync(MarketplaceDbContext db, int orderId, int userId)
     {
         return await db.Orders
@@ -219,5 +284,5 @@ public static class OrderEndpoints
         Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Order not found");
 
     private static IResult Conflict(string detail) =>
-        Results.Problem(statusCode: StatusCodes.Status409Conflict, title: "Order status conflict", detail: detail);
+        Results.Problem(statusCode: StatusCodes.Status409Conflict, title: "Conflict", detail: detail);
 }
