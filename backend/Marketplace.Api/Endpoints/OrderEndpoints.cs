@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Marketplace.Api.Auth;
 using Marketplace.Api.Data;
+using Marketplace.Api.Domain;
 using Marketplace.Api.Dtos;
 using Microsoft.EntityFrameworkCore;
 
@@ -15,6 +16,15 @@ public static class OrderEndpoints
         group.MapPost("/", CreateOrder).RequireAuthorization(Policies.Buyer);
         group.MapGet("/", ListOrders).RequireAuthorization(Policies.BuyerOrSeller);
         group.MapGet("/{id:int}", GetOrder).RequireAuthorization();
+
+        group.MapPost("/{id:int}/accept", (int id, ClaimsPrincipal user, MarketplaceDbContext db) =>
+            ChangeStatus(id, OrderAction.Accept, user, db)).RequireAuthorization();
+        group.MapPost("/{id:int}/deliver", (int id, ClaimsPrincipal user, MarketplaceDbContext db) =>
+            ChangeStatus(id, OrderAction.Deliver, user, db)).RequireAuthorization();
+        group.MapPost("/{id:int}/complete", (int id, ClaimsPrincipal user, MarketplaceDbContext db) =>
+            ChangeStatus(id, OrderAction.Complete, user, db)).RequireAuthorization();
+        group.MapPost("/{id:int}/cancel", (int id, ClaimsPrincipal user, MarketplaceDbContext db) =>
+            ChangeStatus(id, OrderAction.Cancel, user, db)).RequireAuthorization();
     }
 
     private static async Task<IResult> CreateOrder(
@@ -130,11 +140,58 @@ public static class OrderEndpoints
     private static async Task<IResult> GetOrder(int id, ClaimsPrincipal user, MarketplaceDbContext db)
     {
         var order = await GetDetailsAsync(db, id, user.GetUserId());
+        return order is null ? OrderNotFound() : Results.Ok(order);
+    }
 
-        // Missing, or not part of this order: the same answer, so we do not reveal that it exists (decision D10).
-        return order is null
-            ? Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Order not found")
-            : Results.Ok(order);
+    private static async Task<IResult> ChangeStatus(
+        int id,
+        OrderAction action,
+        ClaimsPrincipal user,
+        MarketplaceDbContext db)
+    {
+        var userId = user.GetUserId();
+
+        // 1) Is this user part of the order? If not, we answer 404 as if it does not exist (decision D10).
+        var order = await db.Orders
+            .AsNoTracking()
+            .Where(o => o.Id == id && (o.BuyerId == userId || o.Service.SellerId == userId))
+            .Select(o => new { o.Status, o.BuyerId })
+            .FirstOrDefaultAsync();
+
+        if (order is null)
+            return OrderNotFound();
+
+        // 2) Does the state machine allow this person to do this action in this status?
+        var actor = order.BuyerId == userId ? OrderParty.Buyer : OrderParty.Seller;
+        var result = OrderRules.Decide(order.Status, action, actor);
+
+        switch (result.Decision)
+        {
+            case TransitionDecision.ActorNotAllowed:
+                return Results.Problem(
+                    statusCode: StatusCodes.Status403Forbidden,
+                    title: "You are not allowed to do this action on this order");
+
+            case TransitionDecision.WrongStatus:
+                return Conflict($"This action does not fit the order status. The order is {order.Status}.");
+        }
+
+        var current = order.Status;
+        var next = result.NewStatus!.Value;
+        var now = DateTime.UtcNow;
+
+        // 3) One atomic UPDATE with a condition: it changes the row only if the status is still the one we read.
+        // If two requests arrive together, only the first one matches. The other one affects 0 rows.
+        var changed = await db.Orders
+            .Where(o => o.Id == id && o.Status == current)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(o => o.Status, next)
+                .SetProperty(o => o.UpdatedAt, now));
+
+        if (changed == 0)
+            return Conflict("The order was changed by someone else. Reload it and try again.");
+
+        return Results.Ok(await GetDetailsAsync(db, id, userId));
     }
 
     private static async Task<OrderDetails?> GetDetailsAsync(MarketplaceDbContext db, int orderId, int userId)
@@ -157,4 +214,10 @@ public static class OrderEndpoints
                     : new ReviewInfo(o.Review.Rating, o.Review.Comment, o.Review.CreatedAt)))
             .FirstOrDefaultAsync();
     }
+
+    private static IResult OrderNotFound() =>
+        Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Order not found");
+
+    private static IResult Conflict(string detail) =>
+        Results.Problem(statusCode: StatusCodes.Status409Conflict, title: "Order status conflict", detail: detail);
 }
