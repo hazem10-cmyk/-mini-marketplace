@@ -4,6 +4,8 @@ namespace Marketplace.Api.Dtos;
 
 public record CreateOrderRequest(int? ServiceId);
 
+public record CreateReviewRequest(int? Rating, string? Comment);
+
 public record PartyInfo(int Id, string DisplayName);
 
 public record ReviewInfo(int Rating, string? Comment, DateTime CreatedAt);
