@@ -34,7 +34,7 @@ public static class ServiceEndpoints
         int page = 1,
         int pageSize = 10)
     {
-        var errors = ValidatePaging(page, pageSize);
+        var errors = Paging.Validate(page, pageSize);
         if (sort is not null && !AllowedSorts.Contains(sort))
             errors["sort"] = ["sort must be newest, priceAsc, or priceDesc"];
         if (errors.Count > 0)
@@ -83,7 +83,7 @@ public static class ServiceEndpoints
             .ToList();
 
         return Results.Ok(new PagedResult<ServiceListItem>(
-            items, page, pageSize, totalItems, TotalPages(totalItems, pageSize)));
+            items, page, pageSize, totalItems, Paging.TotalPages(totalItems, pageSize)));
     }
 
     private static async Task<IResult> GetService(int id, MarketplaceDbContext db)
@@ -98,7 +98,7 @@ public static class ServiceEndpoints
         int page = 1,
         int pageSize = 10)
     {
-        var errors = ValidatePaging(page, pageSize);
+        var errors = Paging.Validate(page, pageSize);
         if (errors.Count > 0)
             return Results.ValidationProblem(errors);
 
@@ -121,7 +121,7 @@ public static class ServiceEndpoints
             .ToListAsync();
 
         return Results.Ok(new PagedResult<ReviewItem>(
-            items, page, pageSize, totalItems, TotalPages(totalItems, pageSize)));
+            items, page, pageSize, totalItems, Paging.TotalPages(totalItems, pageSize)));
     }
 
     private static async Task<IResult> ListMyServices(
@@ -130,7 +130,7 @@ public static class ServiceEndpoints
         int page = 1,
         int pageSize = 10)
     {
-        var errors = ValidatePaging(page, pageSize);
+        var errors = Paging.Validate(page, pageSize);
         if (errors.Count > 0)
             return Results.ValidationProblem(errors);
 
@@ -151,7 +151,7 @@ public static class ServiceEndpoints
             .ToListAsync();
 
         return Results.Ok(new PagedResult<MyServiceItem>(
-            items, page, pageSize, totalItems, TotalPages(totalItems, pageSize)));
+            items, page, pageSize, totalItems, Paging.TotalPages(totalItems, pageSize)));
     }
 
     private static async Task<IResult> CreateService(
@@ -253,22 +253,6 @@ public static class ServiceEndpoints
         Results.Problem(
             statusCode: StatusCodes.Status403Forbidden,
             title: "You can only change your own services");
-
-    private static Dictionary<string, string[]> ValidatePaging(int page, int pageSize)
-    {
-        var errors = new Dictionary<string, string[]>();
-
-        if (page < 1 || page > 100_000)
-            errors["page"] = ["page must be between 1 and 100000"];
-
-        if (pageSize < 1 || pageSize > 50)
-            errors["pageSize"] = ["pageSize must be between 1 and 50"];
-
-        return errors;
-    }
-
-    private static int TotalPages(int totalItems, int pageSize) =>
-        (int)Math.Ceiling(totalItems / (double)pageSize);
 
     private static double? RoundRating(double? rating) =>
         rating is null ? null : Math.Round(rating.Value, 1);
