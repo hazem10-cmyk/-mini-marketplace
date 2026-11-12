@@ -3,6 +3,7 @@ using Marketplace.Api.Auth;
 using Marketplace.Api.Data;
 using Marketplace.Api.Endpoints;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
 
@@ -16,6 +17,10 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
+
+// Password hashing: PBKDF2 with HMAC-SHA512 and a random salt. 210,000 iterations is the OWASP figure for SHA-512.
+builder.Services.Configure<PasswordHasherOptions>(options => options.IterationCount = 210_000);
+builder.Services.AddSingleton<IPasswordHasher<User>, PasswordHasher<User>>();
 
 var authentication = builder.Services.AddAuthentication(DevHeaderAuthHandler.SchemeName);
 if (builder.Environment.IsDevelopment())
@@ -41,6 +46,7 @@ if (app.Environment.IsDevelopment())
         var db = scope.ServiceProvider.GetRequiredService<MarketplaceDbContext>();
         await db.Database.MigrateAsync();
         await DevSeeder.SeedAsync(db);
+        await DevPasswords.ApplyAsync(db, scope.ServiceProvider.GetRequiredService<IPasswordHasher<User>>());
     }
 
     app.MapOpenApi();
