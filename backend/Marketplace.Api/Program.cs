@@ -2,7 +2,6 @@ using System.Text.Json.Serialization;
 using Marketplace.Api.Auth;
 using Marketplace.Api.Data;
 using Marketplace.Api.Endpoints;
-using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
@@ -29,18 +28,8 @@ builder.Services.AddOptions<JwtOptions>()
     .ValidateOnStart();
 builder.Services.AddSingleton<TokenService>();
 
-var authentication = builder.Services.AddAuthentication(DevHeaderAuthHandler.SchemeName);
-if (builder.Environment.IsDevelopment())
-{
-    authentication.AddScheme<AuthenticationSchemeOptions, DevHeaderAuthHandler>(
-        DevHeaderAuthHandler.SchemeName, null);
-}
-
-builder.Services.AddAuthorizationBuilder()
-    .AddPolicy(Policies.Buyer, policy => policy.RequireRole(nameof(UserRole.Buyer)))
-    .AddPolicy(Policies.Seller, policy => policy.RequireRole(nameof(UserRole.Seller)))
-    .AddPolicy(Policies.BuyerOrSeller, policy => policy.RequireRole(nameof(UserRole.Buyer), nameof(UserRole.Seller)))
-    .AddPolicy(Policies.Admin, policy => policy.RequireRole(nameof(UserRole.Admin)));
+// JWT bearer authentication and the role policies.
+builder.Services.AddMarketplaceAuthentication();
 
 var app = builder.Build();
 
